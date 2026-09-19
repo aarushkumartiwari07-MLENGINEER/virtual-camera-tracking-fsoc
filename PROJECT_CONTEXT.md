@@ -163,7 +163,7 @@ This project delivers a **100% software-based virtual camera tracking, simulatio
 
 ## 6. Phased Implementation Roadmap
 
-- [x] **Phase 1: Foundational Simulation Engine**
+- [x] **Phase 1: Foundational Simulation Engine & Development Visualizer**
   - Virtual 2000×2000 world environment
   - Optical beacon model (shape, size, intensity)
   - 4 Motion models: Straight-line, Circular, Figure-of-8, Random
@@ -172,6 +172,7 @@ This project delivers a **100% software-based virtual camera tracking, simulatio
   - Ground-truth state generation & telemetry
   - 8-bit monochrome frame renderer
   - Frontend-agnostic engine API & comprehensive unit test suite
+  - Lightweight real-time (30 Hz) Development Visualizer (`visualizer.py` / `main.py --view`) showing synchronized World View, Sensor View, and Telemetry HUD
 - [ ] **Phase 2: Classical Tracking Pipeline**
   - Candidate beacon detection (thresholding, contour analysis, morphological ops)
   - Sub-pixel centroid estimation (intensity-weighted moments)
@@ -200,8 +201,15 @@ This project delivers a **100% software-based virtual camera tracking, simulatio
 
 ---
 
-## 7. Current Implementation Status
+## 7. Current Implementation Status & Development Visualizer
 
-**Current Milestone**: Phase 1 Completed.
-- All core simulation models, mathematical projections, motion trajectories, ground-truth data models, and renderer implemented.
-- Pure Python simulation engine tested with full test coverage.
+**Current Milestone**: Phase 1 Completed & Visually Verified.
+- All core simulation models, mathematical projections, motion trajectories, ground-truth data models, and sensor renderer implemented.
+- Pure Python simulation engine tested with full test coverage (24/24 passing unit tests).
+- **Phase 1 Debug Visualizer** (`visualizer.py`): Real-time (~30 Hz) OpenCV-based development viewer:
+  1. **World View Panel** ($520 \times 520$ px): Renders the $2000 \times 2000$ world, coordinate grid, camera position marker, dynamic camera FOV frustum footprint, beacon trajectory history trail, instantaneous velocity vector, and current beacon position.
+  2. **Camera Sensor View Panel** ($640 \times 480$ px): Displays the actual raw monochrome sensor frame produced by `SimulationEngine.renderer`, overlaid with optical center bore-sight crosshairs, target acquisition marker, subpixel centroid coordinates, and "OUT OF FOV" alert banners.
+  3. **Live Telemetry & Control HUD**: Real-time readout of simulation time, frame counter, world coordinates, pan/tilt gimbal angles, visibility status, image pixel coordinates $(u, v)$, and bore-sight error vectors.
+  4. **Interactive Controls**: `[SPACE]` Play/Pause, `[R]` Reset, `[1-4]` Switch motion model on-the-fly, `[S/F]` Adjust simulation speed, `[Q/ESC]` Exit.
+- **Important Note**: This viewer is strictly a Phase 1 internal development and debug validation tool, completely decoupled from the core engine and not the final evaluator GUI. It visually validates physical kinematics, angular projections, and sensor rasterization before implementing Phase 2 tracking.
+

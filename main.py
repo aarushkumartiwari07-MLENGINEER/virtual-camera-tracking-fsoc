@@ -146,16 +146,28 @@ def main() -> None:
         action="store_true",
         help="Save the final sensor frame as a PNG file",
     )
+    parser.add_argument(
+        "--view",
+        "--gui",
+        action="store_true",
+        help="Launch the interactive real-time 30 Hz Phase 1 visualizer window",
+    )
 
     args = parser.parse_args()
-    run_demo(
-        motion_type=args.motion,
-        steps=args.steps,
-        fps=args.fps,
-        shape=args.shape,
-        save_frame=args.save_frame,
-    )
+
+    if args.view:
+        from visualization.viewer import launch_visualizer
+        launch_visualizer(motion=args.motion, fps=args.fps)
+    else:
+        run_demo(
+            motion_type=args.motion,
+            steps=args.steps,
+            fps=args.fps,
+            shape=args.shape,
+            save_frame=args.save_frame,
+        )
 
 
 if __name__ == "__main__":
     main()
+
