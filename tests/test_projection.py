@@ -112,3 +112,59 @@ def test_partial_edge_visibility():
     assert bbox[0] == 637.0
     assert bbox[2] == 647.0
     # Right border is 640, so part of the bbox [637, 640) is within the sensor!
+
+
+def test_screenshot_equivalent_case():
+    """
+    Verify the exact benchmark case:
+    Camera = (1000.0, 1000.0), Pan/Tilt = (0.0, 0.0)
+    Beacon = (1043.1, 861.4)
+    Yields image projection u = 363.1, v = 101.4.
+    """
+    camera = Camera(CameraConfig(
+        resolution=(640, 480),
+        fov_deg=(4.0, 3.0),
+        initial_pos=(1000.0, 1000.0),
+        initial_pan_deg=0.0,
+        initial_tilt_deg=0.0,
+    ))
+    beacon = Beacon(BeaconConfig(
+        initial_pos=(1043.1, 861.4),
+        size=10.0,
+    ))
+
+    is_vis, img_pos, bbox, ang_err, pix_err = Projector.project_beacon(beacon, camera)
+
+    assert is_vis is True
+    assert pytest.approx(img_pos[0], abs=1e-3) == 363.1
+    assert pytest.approx(img_pos[1], abs=1e-3) == 101.4
+    assert pytest.approx(pix_err[0], abs=1e-3) == +43.1
+    assert pytest.approx(pix_err[1], abs=1e-3) == -138.6
+    assert pytest.approx(ang_err[0], abs=1e-4) == +43.1 * (4.0 / 640.0)  # +0.269375 deg
+    assert pytest.approx(ang_err[1], abs=1e-4) == -138.6 * (3.0 / 480.0) # -0.86625 deg
+
+
+def test_world_fov_footprint_consistency():
+    """
+    Verify that any beacon strictly inside the 640x480 world-plane FOV footprint
+    is marked visible in image sensor space, and any point outside is marked not visible.
+    """
+    camera = Camera(CameraConfig(
+        resolution=(640, 480),
+        fov_deg=(4.0, 3.0),
+        initial_pos=(1000.0, 1000.0),
+        initial_pan_deg=0.0,
+        initial_tilt_deg=0.0,
+    ))
+
+    # Corner 1: Inside top-left world footprint (1000-310, 1000-230) = (690, 770)
+    b_inside = Beacon(BeaconConfig(initial_pos=(690.0, 770.0), size=10.0))
+    is_vis, img_pos, _, _, _ = Projector.project_beacon(b_inside, camera)
+    assert is_vis is True
+    assert 0 <= img_pos[0] < 640 and 0 <= img_pos[1] < 480
+
+    # Corner 2: Outside world footprint (1000-330, 1000-250) = (670, 750)
+    b_outside = Beacon(BeaconConfig(initial_pos=(660.0, 740.0), size=10.0))
+    is_vis, img_pos, _, _, _ = Projector.project_beacon(b_outside, camera)
+    assert is_vis is False
+
