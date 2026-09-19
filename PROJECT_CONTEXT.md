@@ -42,25 +42,25 @@ This project delivers a **100% software-based virtual camera tracking, simulatio
 - **Sensor Model**: Monochrome 8-bit sensor (color optional).
 
 ### Mathematical Coordinate Systems & Angular Projection Model:
-In alignment with the software-only problem statement:
-- **World Space ($X_w, Y_w$)**: A 2D planar angular tracking space of $2000 \times 2000$ pixels.
-- **Angular Mapping**: Each world pixel represents an angular increment of:
-  $$S_x = \frac{\text{FOV}_h}{W_{cam}} = \frac{4.0^\circ}{640} = 0.00625^\circ/\text{px} = 1.09083 \times 10^{-4}\text{ rad/px}$$
-  $$S_y = \frac{\text{FOV}_v}{H_{cam}} = \frac{3.0^\circ}{480} = 0.00625^\circ/\text{px} = 1.09083 \times 10^{-4}\text{ rad/px}$$
-  The full $2000 \times 2000$ virtual search plane corresponds to a total angular uncertainty region of $12.5^\circ \times 12.5^\circ$ ($2000 \times 0.00625^\circ$).
-- **Depth / 3D Physical Footprint Relationship**:
-  In a physical 3D optical system, spatial footprint at distance $D$ is $W = 2D \tan(\text{FOV}_h/2) \approx D \cdot \text{FOV}_h$. In this software simulation, world coordinates operate in the **calibrated angular search plane** (equivalent to depth-normalized plane where $1\text{ world unit} = 1\text{ sensor pixel}$ at zero pan/tilt). Thus, the instantaneous camera FOV observes exactly a $640 \times 480$ world-unit window of the $2000 \times 2000$ angular search space.
-- **Projection Equations**:
-  For camera position $(X_{cam}, Y_{cam})$ with pan $\theta_{pan}$ and tilt $\theta_{tilt}$, target position $(X_b, Y_b)$, and principal point $(u_0, v_0) = (320.0, 240.0)$:
+- **Implementation Abstraction**:
+  The SIH problem statement specifies a virtual scene of minimum $2000 \times 2000$ pixels and a virtual camera with default $640 \times 480$ resolution and $4.0^\circ \times 3.0^\circ$ FOV. To model this in software without requiring an arbitrary 3D distance/depth parameter $D$, the simulation adopts a **calibrated 2D angular search-plane abstraction**:
+  - The world coordinate system $(X_w, Y_w)$ is defined as a 2D angular search plane ($2000 \times 2000$ px default).
+  - Each world unit maps to an angular increment determined by the camera's resolution and field of view:
+    $$S_x = \frac{\text{FOV}_h}{W_{cam}}, \quad S_y = \frac{\text{FOV}_v}{H_{cam}}$$
+    For the default configuration ($640 \times 480$, $4.0^\circ \times 3.0^\circ$), $S_x = S_y = 0.00625^\circ/\text{px} = 1.09083 \times 10^{-4}\text{ rad/px}$, giving a total search field of $12.5^\circ \times 12.5^\circ$.
+  - In a true physical 3D camera, the spatial footprint on a target plane at depth $D$ is $W = 2D \tan(\text{FOV}_h/2) \approx D \cdot \text{FOV}_h$. The 2D angular search-plane abstraction is mathematically equivalent to a depth-normalized plane (where $1\text{ world pixel} = 1\text{ sensor pixel}$ at zero gimbal deflection). The camera's instantaneous FOV therefore observes a $W_{cam} \times H_{cam}$ window of the $2000 \times 2000$ search space.
+  - This design is an intentional, self-contained software abstraction that provides exact, reversible, and configurable angular projection for any resolution $(W_{cam}, H_{cam})$ and any FOV $(\text{FOV}_h, \text{FOV}_v)$.
+- **General Projection Equations**:
+  For arbitrary camera resolution $(W_{cam}, H_{cam})$, field of view $(\text{FOV}_h, \text{FOV}_v)$, principal point $(u_0, v_0) = (W_{cam}/2, H_{cam}/2)$, camera position $(X_{cam}, Y_{cam})$ with pan $\theta_{pan}$ and tilt $\theta_{tilt}$, and beacon position $(X_b, Y_b)$:
   $$\Delta \theta_{az} = (X_b - X_{cam}) \cdot S_x - \theta_{pan}$$
   $$\Delta \theta_{el} = (Y_b - Y_{cam}) \cdot S_y - \theta_{tilt}$$
-  $$u = u_0 + \frac{\Delta \theta_{az}}{S_x} = 320.0 + (X_b - X_{cam}) - \frac{\theta_{pan}}{S_x}$$
-  $$v = v_0 + \frac{\Delta \theta_{el}}{S_y} = 240.0 + (Y_b - Y_{cam}) - \frac{\theta_{tilt}}{S_y}$$
-- **Verification Example**:
+  $$u = u_0 + \frac{\Delta \theta_{az}}{S_x} = \frac{W_{cam}}{2} + (X_b - X_{cam}) - \frac{\theta_{pan}}{S_x}$$
+  $$v = v_0 + \frac{\Delta \theta_{el}}{S_y} = \frac{H_{cam}}{2} + (Y_b - Y_{cam}) - \frac{\theta_{tilt}}{S_y}$$
+- **Verification Example (Default Config)**:
   With camera at $(1000.0, 1000.0)$, $\theta_{pan} = 0^\circ, \theta_{tilt} = 0^\circ$, and beacon at $(1043.1, 861.4)$:
   $$\Delta X = 1043.1 - 1000.0 = +43.1 \implies u = 320.0 + 43.1 = 363.1\text{ px}$$
   $$\Delta Y = 861.4 - 1000.0 = -138.6 \implies v = 240.0 - 138.6 = 101.4\text{ px}$$
-  $$\Delta \theta_{az} = +43.1 \times 0.00625^\circ = +0.269^\circ, \quad \Delta \theta_{el} = -138.6 \times 0.00625^\circ = -0.866^\circ$$
+  $$\Delta \theta_{az} = +43.1 \times 0.00625^\circ = +0.269375^\circ, \quad \Delta \theta_{el} = -138.6 \times 0.00625^\circ = -0.866250^\circ$$
 
 ### Target / Optical Beacon Parameters:
 - **Target Type**: Optical beacon spot (laser/LED beacon emission).

@@ -47,8 +47,8 @@ class SimulationVisualizer:
 
         # UI Layout dimensions
         self.world_panel_size = 520  # 520x520 square for world view
-        self.cam_width = 640
-        self.cam_height = 480
+        self.cam_width = self.engine.camera.width
+        self.cam_height = self.engine.camera.height
         self.hud_height = 180
         self.margin = 15
 
@@ -203,8 +203,9 @@ class SimulationVisualizer:
         # Convert 8-bit single-channel monochrome frame to 3-channel BGR for colored overlays
         view = cv2.cvtColor(raw_frame, cv2.COLOR_GRAY2BGR)
 
-        # Optical Bore-Sight Crosshair at Principal Point (320, 240)
-        cx, cy = 320, 240
+        # Optical Bore-Sight Crosshair at Principal Point (u0, v0)
+        cx = int(round(self.engine.camera.principal_point[0]))
+        cy = int(round(self.engine.camera.principal_point[1]))
         cross_color = (80, 120, 160)
         cv2.line(view, (cx - 20, cy), (cx + 20, cy), cross_color, 1, cv2.LINE_AA)
         cv2.line(view, (cx, cy - 20), (cx, cy + 20), cross_color, 1, cv2.LINE_AA)
@@ -236,13 +237,16 @@ class SimulationVisualizer:
             cv2.putText(view, tag_text, (iu + 10, max(20, iv - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 0), 1, cv2.LINE_AA)
         else:
             # Out of FOV Alert Banner
-            banner = np.zeros((40, self.cam_width, 3), dtype=np.uint8)
+            banner_h = 40
+            by1 = max(0, cy - banner_h // 2)
+            by2 = min(self.cam_height, cy + banner_h // 2)
+            banner = np.zeros((by2 - by1, self.cam_width, 3), dtype=np.uint8)
             banner[:] = (0, 0, 160)
-            cv2.addWeighted(banner, 0.6, view[cy - 20:cy + 20, :], 0.4, 0, view[cy - 20:cy + 20, :])
+            cv2.addWeighted(banner, 0.6, view[by1:by2, :], 0.4, 0, view[by1:by2, :])
             cv2.putText(
                 view,
                 "** TARGET OUTSIDE CAMERA FOV **",
-                (self.cam_width // 2 - 165, cy + 6),
+                (max(10, self.cam_width // 2 - 165), cy + 6),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.60,
                 (255, 255, 255),
@@ -252,7 +256,17 @@ class SimulationVisualizer:
 
         # Header Bar
         cv2.rectangle(view, (0, 0), (self.cam_width, 26), (15, 18, 22), -1)
-        cv2.putText(view, "CAMERA SENSOR VIEW [640x480 | 4.0deg x 3.0deg FOV]", (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 220, 255), 1, cv2.LINE_AA)
+        fov_h, fov_v = self.engine.camera.fov_deg
+        cv2.putText(
+            view,
+            f"CAMERA SENSOR VIEW [{self.cam_width}x{self.cam_height} | {fov_h:.1f}deg x {fov_v:.1f}deg FOV]",
+            (10, 18),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.48,
+            (0, 220, 255),
+            1,
+            cv2.LINE_AA,
+        )
         
         status_text = "IN-FOV" if state.is_visible else "OUT-OF-FOV"
         status_color = (0, 255, 100) if state.is_visible else (0, 80, 255)
@@ -341,18 +355,20 @@ class SimulationVisualizer:
         canvas = np.zeros((self.total_height, self.total_width, 3), dtype=np.uint8)
         canvas[:] = (12, 14, 18)  # Deep canvas background
 
-        # Place World View at top-left
+        top_height = max(self.world_panel_size, self.cam_height)
+
+        # Place World View at top-left (vertically centered in top section)
         wx = self.margin
-        wy = self.margin
+        wy = self.margin + (top_height - self.world_panel_size) // 2
         canvas[wy:wy + self.world_panel_size, wx:wx + self.world_panel_size] = world_panel
 
-        # Place Camera View at top-right (vertically centered with world panel)
+        # Place Camera View at top-right (vertically centered in top section)
         cx = wx + self.world_panel_size + self.margin
-        cy = wy + (self.world_panel_size - self.cam_height) // 2
+        cy = self.margin + (top_height - self.cam_height) // 2
         canvas[cy:cy + self.cam_height, cx:cx + self.cam_width] = camera_view
 
         # Place HUD at bottom
-        hy = wy + self.world_panel_size + self.margin
+        hy = self.margin + top_height + self.margin
         canvas[hy:hy + self.hud_height, self.margin:self.margin + self.total_width - 2 * self.margin] = hud_panel[:, self.margin:self.total_width - self.margin]
 
         return canvas
