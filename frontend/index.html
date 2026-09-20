@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SIH26169 — FSOC Virtual Camera Tracking Control System</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="theme-dark">
+
+  <!-- ==================================================================== -->
+  <!-- TOP BAR: Application Header, Telemetry Badges & Primary Actions     -->
+  <!-- ==================================================================== -->
+  <header class="app-header">
+    <div class="header-brand">
+      <div class="brand-title">
+        <span class="brand-tag">SIH26169</span>
+        <span class="brand-name">FSOC VIRTUAL CAMERA TRACKING</span>
+      </div>
+      <div class="brand-subtitle">ISRO / DOS &bull; Greedy Minds &bull; Coarse Alignment Mission Control</div>
+    </div>
+
+    <div class="header-status-group">
+      <div class="status-badge" id="badge-backend">
+        <span class="status-dot dot-gray"></span>
+        <span class="badge-label">API</span>
+        <span class="badge-val">CONNECTING</span>
+      </div>
+      <div class="status-badge" id="badge-ws">
+        <span class="status-dot dot-gray"></span>
+        <span class="badge-label">WS</span>
+        <span class="badge-val">CONNECTING</span>
+      </div>
+      <div class="status-badge" id="badge-sim">
+        <span class="status-dot dot-gray"></span>
+        <span class="badge-label">SIM</span>
+        <span class="badge-val" id="val-sim-status">STOPPED</span>
+      </div>
+      <div class="status-badge" id="badge-tracking">
+        <span class="status-dot dot-gray"></span>
+        <span class="badge-label">TRACK</span>
+        <span class="badge-val" id="val-track-state">SEARCHING</span>
+      </div>
+      <div class="status-badge" id="badge-fps">
+        <span class="badge-label">RATE</span>
+        <span class="badge-val" id="val-actual-fps">0.0 FPS</span>
+      </div>
+    </div>
+
+    <div class="header-controls">
+      <button class="btn btn-primary" id="btn-start" title="Start Simulation">▶ START</button>
+      <button class="btn btn-secondary" id="btn-pause" title="Pause Simulation" disabled>⏸ PAUSE</button>
+      <button class="btn btn-secondary" id="btn-resume" title="Resume Simulation" style="display:none;">▶ RESUME</button>
+      <button class="btn btn-danger" id="btn-stop" title="Stop Simulation" disabled>⏹ STOP</button>
+      <button class="btn btn-secondary" id="btn-reset" title="Reset Simulation">⟲ RESET</button>
+      <button class="btn btn-secondary" id="btn-step" title="Advance Single Frame">⏭ STEP</button>
+    </div>
+  </header>
+
+  <!-- ==================================================================== -->
+  <!-- MAIN WORKSPACE: Visualizers (Left) & Telemetry HUD / Graphs (Right)  -->
+  <!-- ==================================================================== -->
+  <main class="main-workspace">
+
+    <!-- LEFT COLUMN: Dual Visualizer Viewports & State Machine Ribbon -->
+    <section class="viewport-column">
+      
+      <!-- Panel 1: World Space Frustum View -->
+      <div class="panel viewport-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span class="panel-icon">🌐</span>
+            <span>WORLD SEARCH PLANE (2000×2000 px)</span>
+          </div>
+          <div class="panel-actions">
+            <span class="telemetry-pill" id="pill-world-beacon">Beacon: (1000.0, 1000.0)</span>
+            <button class="btn-icon" id="btn-clear-trail" title="Clear Trajectory Trail">🧹 Clear Trail</button>
+          </div>
+        </div>
+        <div class="canvas-container" id="world-canvas-container">
+          <canvas id="world-canvas" width="520" height="520"></canvas>
+          <div class="canvas-overlay-legend">
+            <span class="legend-item"><span class="legend-box col-cyan"></span> Camera / Frustum</span>
+            <span class="legend-item"><span class="legend-box col-green"></span> Beacon / Trail</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 2: Camera Sensor Viewport -->
+      <div class="panel viewport-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span class="panel-icon">📷</span>
+            <span>CAMERA SENSOR VIEW (640×480 px &bull; 4.0°×3.0° FOV)</span>
+          </div>
+          <div class="panel-actions">
+            <span class="telemetry-pill" id="pill-fov-status">IN FOV</span>
+          </div>
+        </div>
+        <div class="canvas-container" id="sensor-canvas-container">
+          <canvas id="sensor-canvas" width="640" height="480"></canvas>
+          <div class="sensor-legend">
+            <span class="legend-item"><span class="legend-marker col-green">+</span> Ground Truth</span>
+            <span class="legend-item"><span class="legend-marker col-amber">✕</span> Raw Detected</span>
+            <span class="legend-item"><span class="legend-marker col-cyan">◯</span> Kalman Filtered</span>
+            <span class="legend-item"><span class="legend-marker col-gray">✛</span> Optical Center</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 3: Tracking State Machine Flow -->
+      <div class="panel fsm-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span class="panel-icon">⚙</span>
+            <span>TRACKING STATE MACHINE (FSM)</span>
+          </div>
+          <div class="fsm-stats">
+            <span>Hits: <strong id="fsm-hits">0</strong></span>
+            <span>Losses: <strong id="fsm-losses">0</strong></span>
+          </div>
+        </div>
+        <div class="fsm-flow-container">
+          <div class="fsm-node" id="fsm-node-SEARCHING">
+            <div class="fsm-node-header">SEARCHING</div>
+            <div class="fsm-node-desc">Scanning FOV</div>
+          </div>
+          <div class="fsm-arrow">→</div>
+          <div class="fsm-node" id="fsm-node-ACQUIRED">
+            <div class="fsm-node-header">ACQUIRED</div>
+            <div class="fsm-node-desc">Hit Confirmation</div>
+          </div>
+          <div class="fsm-arrow">→</div>
+          <div class="fsm-node" id="fsm-node-TRACKING">
+            <div class="fsm-node-header">TRACKING</div>
+            <div class="fsm-node-desc">Locked & Filtered</div>
+          </div>
+          <div class="fsm-arrow">⇆</div>
+          <div class="fsm-node" id="fsm-node-LOST">
+            <div class="fsm-node-header">LOST</div>
+            <div class="fsm-node-desc">Coasting / Dropout</div>
+          </div>
+          <div class="fsm-arrow">←</div>
+          <div class="fsm-node" id="fsm-node-REACQUIRED">
+            <div class="fsm-node-header">REACQUIRED</div>
+            <div class="fsm-node-desc">Re-Lock Verified</div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- RIGHT COLUMN: Telemetry HUD, Graphs & Real-Time Stats -->
+    <section class="telemetry-column">
+
+      <!-- Live Telemetry Matrix -->
+      <div class="panel telemetry-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span class="panel-icon">📊</span>
+            <span>LIVE TRACKING TELEMETRY MATRIX</span>
+          </div>
+          <div class="sim-clock" id="sim-clock-display">T+ 0.000s &bull; Frame #0</div>
+        </div>
+
+        <div class="telemetry-grid">
+          <!-- Ground Truth Group -->
+          <div class="telemetry-card">
+            <div class="card-label">GROUND TRUTH (WORLD)</div>
+            <div class="card-value" id="val-gt-world">X: 1000.0, Y: 1000.0</div>
+            <div class="card-sub" id="val-gt-vel">Vel: (0.0, 0.0) px/s</div>
+          </div>
+
+          <div class="telemetry-card">
+            <div class="card-label">GROUND TRUTH (IMAGE)</div>
+            <div class="card-value" id="val-gt-image">u: 320.0, v: 240.0</div>
+            <div class="card-sub" id="val-gt-visible">Visibility: TRUE</div>
+          </div>
+
+          <!-- Raw Detection Group -->
+          <div class="telemetry-card highlight-amber">
+            <div class="card-label">RAW DETECTED CENTROID</div>
+            <div class="card-value" id="val-raw-centroid">u: 320.0, v: 240.0</div>
+            <div class="card-sub" id="val-raw-meta">Area: 100 px &bull; Candidates: 1</div>
+          </div>
+
+          <!-- Kalman Estimate Group -->
+          <div class="telemetry-card highlight-cyan">
+            <div class="card-label">KALMAN FILTERED POSITION</div>
+            <div class="card-value" id="val-kf-pos">u: 320.0, v: 240.0</div>
+            <div class="card-sub" id="val-kf-vel">Est Vel: (0.0, 0.0) px/s</div>
+          </div>
+
+          <!-- Bore-Sight & Tracking Errors -->
+          <div class="telemetry-card">
+            <div class="card-label">BORE-SIGHT ERROR (OPTICAL)</div>
+            <div class="card-value" id="val-boresight-err">du: 0.0, dv: 0.0 px</div>
+            <div class="card-sub" id="val-boresight-ang">dAz: 0.000°, dEl: 0.000°</div>
+          </div>
+
+          <div class="telemetry-card highlight-green">
+            <div class="card-label">TRACKING ACCURACY ERRORS</div>
+            <div class="card-value" id="val-tracking-errors">Raw: 0.00 px &bull; KF: 0.00 px</div>
+            <div class="card-sub" id="val-pipeline-latency">Latency: 0.5 ms</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Real-Time Error vs Time Graph -->
+      <div class="panel graph-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span class="panel-icon">📈</span>
+            <span>CENTROID ERROR VS TIME (px)</span>
+          </div>
+          <div class="graph-legend">
+            <span class="legend-item"><span class="legend-line line-amber"></span> Raw Error</span>
+            <span class="legend-item"><span class="legend-line line-cyan"></span> Kalman Error</span>
+          </div>
+        </div>
+        <div class="canvas-container chart-container">
+          <canvas id="error-chart-canvas" width="600" height="200"></canvas>
+        </div>
+      </div>
+
+      <!-- Tracking State History Timeline -->
+      <div class="panel timeline-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span class="panel-icon">⏱</span>
+            <span>TRACKING STATE TIMELINE (LAST 300 FRAMES)</span>
+          </div>
+          <span class="telemetry-pill" id="timeline-summary">Lock: 100%</span>
+        </div>
+        <div class="canvas-container timeline-container">
+          <canvas id="timeline-chart-canvas" width="600" height="35"></canvas>
+        </div>
+      </div>
+
+      <!-- Aggregate Session Metrics Summary -->
+      <div class="panel metrics-summary-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span class="panel-icon">📋</span>
+            <span>EVALUATOR SESSION BENCHMARK SUMMARY</span>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="btn-reset-metrics">Reset Metrics</button>
+        </div>
+        <div class="metrics-summary-grid">
+          <div class="metric-cell">
+            <span class="metric-num" id="m-det-rate">100.0%</span>
+            <span class="metric-lbl">Detection Rate</span>
+          </div>
+          <div class="metric-cell">
+            <span class="metric-num" id="m-raw-rmse">0.00 px</span>
+            <span class="metric-lbl">Raw RMSE</span>
+          </div>
+          <div class="metric-cell">
+            <span class="metric-num" id="m-kf-rmse">0.00 px</span>
+            <span class="metric-lbl">Kalman RMSE</span>
+          </div>
+          <div class="metric-cell">
+            <span class="metric-num" id="m-acq-time">0.00 s</span>
+            <span class="metric-lbl">Acquisition Time</span>
+          </div>
+          <div class="metric-cell">
+            <span class="metric-num" id="m-loss-rate">0.0%</span>
+            <span class="metric-lbl">Target Loss Rate</span>
+          </div>
+          <div class="metric-cell">
+            <span class="metric-num" id="m-pipe-fps">1500 FPS</span>
+            <span class="metric-lbl">Pipeline Throughput</span>
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- ==================================================================== -->
+  <!-- BOTTOM DOCK: Tabbed Configuration, Phase 3 Ready, Benchmark, Logs    -->
+  <!-- ==================================================================== -->
+  <footer class="app-dock">
+    <div class="dock-tabs">
+      <button class="tab-btn active" data-tab="tab-config">⚙ Configuration</button>
+      <button class="tab-btn" data-tab="tab-phase3">🎯 Phase 3 Controller [Ready]</button>
+      <button class="tab-btn" data-tab="tab-benchmark">🧪 Benchmark Suite</button>
+      <button class="tab-btn" data-tab="tab-disturbances">🌪 Disturbances [Phase 4]</button>
+      <button class="tab-btn" data-tab="tab-logs">📜 Event & Diagnostic Log</button>
+    </div>
+
+    <div class="dock-content">
+
+      <!-- TAB 1: Real-Time Configuration -->
+      <div class="tab-pane active" id="tab-config">
+        <div class="config-grid">
+          
+          <!-- Beacon Settings -->
+          <div class="config-group">
+            <div class="group-title">OPTICAL BEACON</div>
+            <div class="form-row">
+              <label>Motion Model</label>
+              <select id="cfg-beacon-motion" class="form-control">
+                <option value="circular">Circular (Orbit)</option>
+                <option value="straight_line">Straight Line (Linear)</option>
+                <option value="figure_eight">Figure-of-Eight (Lemniscate)</option>
+                <option value="random">Random Walk (Stochastic)</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>Spot Profile</label>
+              <select id="cfg-beacon-shape" class="form-control">
+                <option value="gaussian">Gaussian Optical Beam</option>
+                <option value="square">Square Patch (10×10 px)</option>
+                <option value="circle">Circular Disc</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>Spot Size (px)</label>
+              <input type="number" id="cfg-beacon-size" class="form-control" value="10.0" min="2" max="50" step="1">
+            </div>
+            <div class="form-row">
+              <label>Orbit Radius (px)</label>
+              <input type="number" id="cfg-motion-radius" class="form-control" value="150.0" min="10" max="800" step="10">
+            </div>
+            <div class="form-row">
+              <label>Angular Speed (°/s)</label>
+              <input type="number" id="cfg-motion-speed" class="form-control" value="45.0" min="5" max="360" step="5">
+            </div>
+          </div>
+
+          <!-- Camera Settings -->
+          <div class="config-group">
+            <div class="group-title">VIRTUAL PTZ CAMERA</div>
+            <div class="form-row">
+              <label>Resolution</label>
+              <select id="cfg-cam-res" class="form-control">
+                <option value="640x480">640 × 480 (Default)</option>
+                <option value="1280x720">1280 × 720 (HD)</option>
+                <option value="800x600">800 × 600 (SVGA)</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>FOV (H° × V°)</label>
+              <div class="input-duo">
+                <input type="number" id="cfg-cam-fov-h" class="form-control" value="4.0" step="0.5">
+                <input type="number" id="cfg-cam-fov-v" class="form-control" value="3.0" step="0.5">
+              </div>
+            </div>
+            <div class="form-row">
+              <label>Max Slew Rate (°/s)</label>
+              <div class="input-duo">
+                <input type="number" id="cfg-cam-pan-speed" class="form-control" value="10.0" step="1" title="Max Pan Speed">
+                <input type="number" id="cfg-cam-tilt-speed" class="form-control" value="10.0" step="1" title="Max Tilt Speed">
+              </div>
+            </div>
+            <div class="form-row">
+              <label>Sim Rate (FPS)</label>
+              <input type="number" id="cfg-sim-fps" class="form-control" value="30.0" min="1" max="120" step="1">
+            </div>
+          </div>
+
+          <!-- Detector & Kalman Filter Tuning -->
+          <div class="config-group">
+            <div class="group-title">CV DETECTOR & KALMAN TUNING</div>
+            <div class="form-row">
+              <label>Intensity Threshold</label>
+              <input type="number" id="cfg-det-thresh" class="form-control" value="30.0" min="5" max="250" step="5">
+            </div>
+            <div class="form-row">
+              <label>Process Noise Q (px/s²)</label>
+              <input type="number" id="cfg-kf-q" class="form-control" value="80.0" min="1" max="1000" step="10">
+            </div>
+            <div class="form-row">
+              <label>Measurement Noise R (px)</label>
+              <input type="number" id="cfg-kf-r" class="form-control" value="0.2" min="0.01" max="10.0" step="0.05">
+            </div>
+            <div class="form-row">
+              <label>Max Lost Coasting</label>
+              <input type="number" id="cfg-fsm-lost" class="form-control" value="5" min="1" max="30" step="1">
+            </div>
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="config-group config-actions-group">
+            <div class="group-title">ACTIONS</div>
+            <button class="btn btn-primary btn-block" id="btn-apply-config">Apply Configuration</button>
+            <button class="btn btn-secondary btn-block" id="btn-reset-config">Restore Defaults</button>
+            <button class="btn btn-secondary btn-block" id="btn-randomize-beacon">Randomize Position</button>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- TAB 2: Phase 3 Controller (Ready for Phase 3 Integration) -->
+      <div class="tab-pane" id="tab-phase3">
+        <div class="phase3-container">
+          <div class="phase3-header">
+            <div class="phase3-title">CLOSED-LOOP GIMBAL CONTROLLER (PHASE 3 ARCHITECTURE)</div>
+            <span class="badge-tag tag-warning">INACTIVE &bull; PENDING PHASE 3 INTEGRATION</span>
+          </div>
+          <p class="phase3-desc">
+            The frontend architecture is prepared for the Phase 3 Pan-Tilt-Zoom (PTZ) controller. Once the PID/PD closed-loop gimbal engine is implemented, it will bind directly to these controls to drive optical bore-sight error (u - u₀, v - v₀) → 0.
+          </p>
+          <div class="phase3-controls-grid">
+            <div class="control-box disabled-box">
+              <label>Controller State</label>
+              <select class="form-control" disabled>
+                <option>DISABLED (Open Loop)</option>
+                <option>PID COARSE ALIGNMENT</option>
+                <option>PD RATE DAMPER</option>
+              </select>
+            </div>
+            <div class="control-box disabled-box">
+              <label>Proportional Gain (Kp)</label>
+              <input type="number" class="form-control" value="0.15" disabled>
+            </div>
+            <div class="control-box disabled-box">
+              <label>Integral Gain (Ki)</label>
+              <input type="number" class="form-control" value="0.01" disabled>
+            </div>
+            <div class="control-box disabled-box">
+              <label>Derivative Gain (Kd)</label>
+              <input type="number" class="form-control" value="0.05" disabled>
+            </div>
+            <div class="control-box disabled-box">
+              <label>Deadband Threshold (px)</label>
+              <input type="number" class="form-control" value="1.0" disabled>
+            </div>
+            <div class="control-box disabled-box">
+              <label>Pan / Tilt Command Out</label>
+              <input type="text" class="form-control" value="ΔAz: 0.00°/s, ΔEl: 0.00°/s" disabled>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 3: Benchmark Suite -->
+      <div class="tab-pane" id="tab-benchmark">
+        <div class="benchmark-container">
+          <div class="benchmark-toolbar">
+            <div class="toolbar-left">
+              <label>Benchmark Scenario:</label>
+              <select id="bm-scenario-select" class="form-control">
+                <option value="all">Complete 14-Scenario Benchmark Matrix</option>
+                <option value="A1_static_clean">A1. Static Beacon (Clean Gaussian)</option>
+                <option value="B1_linear_clean">B1. Linear Motion (50 px/s, Clean)</option>
+                <option value="C1_circular_clean">C1. Circular Motion (R=150px, w=45°/s)</option>
+                <option value="D1_figure8_clean">D1. Figure-8 Lemniscate</option>
+                <option value="F2_noisy_1.0px">F2. Noisy Linear (sigma=1.0 px)</option>
+                <option value="G1_dropout_linear">G1. Temporary Loss (5 frames dropout)</option>
+              </select>
+              <button class="btn btn-primary" id="btn-run-benchmark">▶ Run Benchmark</button>
+            </div>
+            <div class="toolbar-right">
+              <span id="bm-status-msg">Ready to benchmark</span>
+            </div>
+          </div>
+
+          <div class="benchmark-table-wrapper">
+            <table class="benchmark-table" id="bm-results-table">
+              <thead>
+                <tr>
+                  <th>Scenario</th>
+                  <th>Motion</th>
+                  <th>Noise (σ)</th>
+                  <th>Raw RMSE</th>
+                  <th>KF RMSE</th>
+                  <th>Raw Max</th>
+                  <th>KF Max</th>
+                  <th>Vel RMSE</th>
+                  <th>Coast Max</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody id="bm-table-body">
+                <tr>
+                  <td colspan="10" class="text-center text-muted">No benchmark results yet. Select a scenario and click Run Benchmark.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 4: Disturbance Matrix (Phase 4) -->
+      <div class="tab-pane" id="tab-disturbances">
+        <div class="disturbance-container">
+          <div class="phase3-header">
+            <div class="phase3-title">ENVIRONMENTAL DISTURBANCES & SENSOR NOISE ENGINE</div>
+            <span class="badge-tag tag-warning">AVAILABLE IN PHASE 4</span>
+          </div>
+          <div class="disturbance-grid">
+            <div class="dist-card disabled-box">
+              <div class="dist-title">Additive Gaussian Noise</div>
+              <div class="dist-status">Phase 4 Roadmap</div>
+              <p>Simulates thermal sensor readout noise across detector pixels.</p>
+            </div>
+            <div class="dist-card disabled-box">
+              <div class="dist-title">Atmospheric Scintillation</div>
+              <div class="dist-status">Phase 4 Roadmap</div>
+              <p>Models refractive index turbulence (Rytov variance / log-normal intensity fluctuations).</p>
+            </div>
+            <div class="dist-card disabled-box">
+              <div class="dist-title">Atmospheric Attenuation (Fog/Haze)</div>
+              <div class="dist-status">Phase 4 Roadmap</div>
+              <p>Beer-Lambert optical transmission loss and background contrast degradation.</p>
+            </div>
+            <div class="dist-card disabled-box">
+              <div class="dist-title">Platform Vibration & Jitter</div>
+              <div class="dist-status">Phase 4 Roadmap</div>
+              <p>Multi-frequency angular gimbal jitter ($5-50\text{ Hz}$) and carrier vehicle dynamics.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 5: Live Event & Diagnostic Log -->
+      <div class="tab-pane" id="tab-logs">
+        <div class="logs-container">
+          <div class="logs-toolbar">
+            <div class="logs-filter-group">
+              <label>Filter:</label>
+              <button class="btn btn-xs log-filter active" data-filter="ALL">ALL</button>
+              <button class="btn btn-xs log-filter" data-filter="INFO">INFO</button>
+              <button class="btn btn-xs log-filter" data-filter="WARNING">WARN</button>
+              <button class="btn btn-xs log-filter" data-filter="ERROR">ERR</button>
+            </div>
+            <button class="btn btn-secondary btn-xs" id="btn-clear-logs">Clear Log</button>
+          </div>
+          <div class="logs-feed" id="logs-feed">
+            <div class="log-entry log-INFO">
+              <span class="log-time">[00:00:00]</span>
+              <span class="log-cat">[SYSTEM]</span>
+              <span class="log-msg">Interface initialized. Ready to connect to backend service.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </footer>
+
+  <!-- Scripts -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

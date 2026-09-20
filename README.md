@@ -29,6 +29,19 @@ Free space optical communication links require establishing line-of-sight pointi
 ├── backend/
 │   ├── __init__.py
 │   ├── engine.py                   # Master frontend-agnostic SimulationEngine API
+│   ├── api/                        # FastAPI Integration & Service Layer
+│   │   ├── __init__.py
+│   │   ├── server.py               # FastAPI application, CORS, static mounting
+│   │   ├── schemas.py              # Pydantic models for REST & WebSocket payloads
+│   │   ├── websocket_manager.py    # Real-time WebSocket connection manager (/ws)
+│   │   ├── routes/                 # Thin REST route handlers
+│   │   │   ├── simulation_routes.py
+│   │   │   ├── config_routes.py
+│   │   │   ├── tracking_routes.py
+│   │   │   └── benchmark_routes.py
+│   │   └── services/               # Background task & simulation loop runners
+│   │       ├── simulation_service.py
+│   │       └── benchmark_service.py
 │   ├── config/
 │   │   ├── __init__.py
 │   │   ├── simulation_config.py    # Dataclasses for World, Beacon, Camera, Simulation
@@ -55,12 +68,23 @@ Free space optical communication links require establishing line-of-sight pointi
 │   │   └── pipeline.py             # Unified VisionPipeline (Pure frame input, 0% ground truth)
 │   └── evaluation/
 │       ├── __init__.py
-│       └── evaluator.py            # Independent TrackingEvaluator comparing Tracker to Ground Truth
+│       ├── evaluator.py            # Independent TrackingEvaluator comparing Tracker to Ground Truth
+│       └── benchmark.py            # BenchmarkRunner executing parameterized test matrices
+├── frontend/                       # Developer Frontend (Aerospace Mission Control UI)
+│   ├── index.html                  # Responsive multi-panel HUD layout
+│   ├── css/
+│   │   └── style.css               # Clean dark-mode engineering theme
+│   └── js/
+│       ├── api.js                  # REST API client
+│       ├── websocket.js            # Auto-reconnecting WebSocket client
+│       ├── renderers/              # Native Canvas 2D renderers (World, Sensor, Charts)
+│       └── app.js                  # Master UI controller
 ├── visualization/
 │   ├── __init__.py
-│   └── viewer.py                   # Real-time visualizer with GT, Raw, Kalman overlays & HUD
+│   └── viewer.py                   # Real-time desktop visualizer with GT, Raw, Kalman overlays & HUD
 ├── tests/
-│   ├── __init__.py
+│   ├── test_api.py                 # FastAPI REST and WebSocket integration tests
+│   ├── test_kalman_audit.py        # Post-audit Kalman accuracy tests
 │   ├── test_projection.py          # Projection math, FOV clipping, invertibility tests
 │   ├── test_motion.py              # Motion trajectory & boundary behavior tests
 │   ├── test_camera.py              # PTZ gimbal kinematics & slew rate tests
@@ -75,8 +99,11 @@ Free space optical communication links require establishing line-of-sight pointi
 │   ├── test_evaluator.py           # Objective metric computation & strict isolation tests
 │   └── test_visualizer.py          # Visualizer panel layout and rendering tests
 ├── main.py                         # Simulation & Tracking CLI runner & live telemetry
-├── requirements.txt                # Dependencies (numpy, opencv-python, pytest)
+├── run_benchmark.py                # Standalone benchmark execution script
+├── requirements.txt                # Dependencies (numpy, opencv-python, fastapi, uvicorn, pytest)
 ├── PROJECT_CONTEXT.md              # Complete project context, SIH specs, and roadmap
+├── docs/
+│   └── FRONTEND_ARCHITECTURE.md    # Frontend & API architecture and contract documentation
 └── README.md                       # Documentation and usage instructions
 ```
 
@@ -121,104 +148,62 @@ pip install -r requirements.txt
 
 ---
 
-## 5. Running the Simulation & Visualizer
+## 5. Running the Developer Web Frontend & API Server
 
-### A. Real-Time Interactive Visualizer
-Launch the 30 Hz real-time graphical dashboard showing synchronized World View, Sensor View with Phase 2 Tracking Reticles, and Ground-Truth vs Tracker Telemetry:
-
+### Launch the Full Developer Application:
 ```bash
-# Launch visualizer with default circular motion
-python visualizer.py
+python -m uvicorn backend.api.server:app --host 127.0.0.1 --port 8000 --reload
+```
+Open `http://127.0.0.1:8000/` in any modern web browser to access:
+- **World Frustum Visualization**: Real-time 2000×2000 space, FOV frustum, and trajectory trails.
+- **Sensor Viewport**: 640×480 monochrome sensor frame with Ground Truth, Raw CV (`✕`), and Kalman (`◯`) reticles.
+- **Live Telemetry & Tracking HUD**: Dynamic FPS, CV computation latency ($< 1\text{ ms}$), instant and cumulative RMSE, and tracking state.
+- **Real-Time Error Graph & State Ribbon**: Dynamic canvas chart plotting Raw vs. Kalman error over time and FSM state transitions.
+- **Interactive Controls & Benchmarks**: Runtime configuration tuning, scenario execution, and Phase 3 PTZ interface placeholder.
 
-# Or launch via main.py CLI
-python main.py --view
+Interactive Swagger API docs: `http://127.0.0.1:8000/docs`
 
-# Launch with specific motion model
+---
+
+## 6. Running Desktop Visualizer & CLI
+
+### Desktop OpenCV Visualizer:
+```bash
+python visualizer.py --motion circular
 python visualizer.py --motion figure_eight
 python visualizer.py --motion random
-python visualizer.py --motion straight_line
 ```
 
-#### Visual Markers on Sensor View:
-- **Green Reticle (`+`)**: Ground-Truth Beacon Center (Evaluation overlay only).
-- **Orange Cross (`x`)**: Raw Classical CV Detected Centroid $(u_d, v_d)$.
-- **Cyan Ring (`o`) & Cyan Vector**: Kalman Filtered Position Estimate $(u_f, v_f)$ and Estimated Velocity Vector $(\dot{u}, \dot{v})$.
-
----
-
-### B. Headless CLI Demonstration:
+### Headless CLI Demonstration:
 ```bash
-# Run 60 simulation steps with circular motion (prints step table & summary metrics)
 python main.py --motion circular --steps 60
-
-# Run with Gaussian beacon shape profile
-python main.py --motion circular --shape gaussian --steps 60
-```
-
-### C. Programmatic Usage (Frontend Agnostic):
-```python
-from backend.engine import SimulationEngine
-from backend.config import SimulationConfig, VisionConfig
-from backend.vision.pipeline import VisionPipeline
-from backend.evaluation.evaluator import TrackingEvaluator
-
-# 1. Setup Simulation Engine & Vision Pipeline
-engine = SimulationEngine(SimulationConfig(fps=30.0))
-pipeline = VisionPipeline(VisionConfig())
-evaluator = TrackingEvaluator()
-
-# 2. Simulation and Tracking Loop
-for _ in range(100):
-    frame, gt_state = engine.step()
-    
-    # Pure vision tracking (NO ground-truth input)
-    tracker_output = pipeline.process_frame(frame, dt=1.0 / 30.0)
-    
-    # Independent evaluation layer
-    step_metrics = evaluator.evaluate_step(tracker_output, gt_state)
-
-# 3. Print Objective Benchmark Summary
-summary = evaluator.get_summary_metrics()
-print(f"Detection Success Rate: {summary['detection_rate_pct']:.1f}%")
-print(f"Raw RMSE Error: {summary['rmse_raw_error_px']:.3f} px")
-print(f"Filtered RMSE Error: {summary['rmse_filtered_error_px']:.3f} px")
 ```
 
 ---
 
-## 6. Running Unit Tests & Benchmark Audit
+## 7. Running Unit Tests & Benchmark Matrix
 
-### Run Complete Test Suite:
+### Run Complete Test Suite (89 Tests):
 ```bash
 pytest -v
 ```
-*(83 passing unit, integration, and regression audit tests)*
 
-### Run Kalman Filter Benchmark Matrix:
+### Run Standalone Benchmark Runner:
 ```bash
 python run_benchmark.py
 ```
-*(Executes 15 controlled benchmark scenarios comparing Raw CV vs. Kalman across clean, noisy, and dropout tracks)*
 
 ---
 
-## 7. Current Limitations & Next Steps
+## 8. Phased Development Roadmap
 
-### Implemented in Phase 1 & Phase 2:
-- Virtual 2000x2000 environment and dynamic beacon trajectories.
-- Virtual PTZ camera with 4°x3° FOV and physical kinematics.
-- High-precision intensity-weighted subpixel centroid extraction.
-- Deterministic classical CV candidate detection and scoring.
-- 4D Constant-Velocity Kalman filter calibrated for minimal geometric lag and high noise suppression.
-- 5-State Tracking FSM (`SEARCHING`, `ACQUIRED`, `TRACKING`, `LOST`, `REACQUIRED`).
-- Independent `TrackingEvaluator` and `TrackingBenchmarkRunner` for objective performance verification.
-- 83/83 passing automated unit, integration, and audit tests.
+- [x] **Phase 1: Foundational Simulation Engine & Mathematical Models**
+- [x] **Phase 2: Classical CV Detection, Subpixel Centroiding & Kalman Tracking**
+- [x] **Integration: FastAPI Service Layer & Developer Frontend Interface**
+- [ ] **Phase 3: Closed-Loop Gimbal Control (PID/PD pan/tilt tracking)**
+- [ ] **Phase 4: Environmental Disturbances & Atmospheric Noise**
+- [ ] **Phase 5: Lightweight AI Beacon Verification**
+- [ ] **Phase 6: Automated Performance Benchmarking**
+- [ ] **Phase 7: Evaluator MP4 Mode**
 
-### Current Limitations:
-- Single-beacon primary tracking (multi-target discrimination will be enhanced with AI verification in Phase 5).
-- Camera is currently stationary; closed-loop pan/tilt tracking control will be added in Phase 3.
-- Clean synthetic background; atmospheric disturbances and sensor noise will be introduced in Phase 4.
-
-### Next Step (Phase 3):
-- Implement closed-loop Pan-Tilt-Zoom (PTZ) gimbal control (discrete PID/PD controller) to drive tracking error $(u - u_0, v - v_0) \to 0$.
 
