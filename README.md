@@ -186,12 +186,19 @@ print(f"Filtered RMSE Error: {summary['rmse_filtered_error_px']:.3f} px")
 
 ---
 
-## 6. Running Unit Tests
+## 6. Running Unit Tests & Benchmark Audit
 
-Run the complete 76-test suite using pytest:
+### Run Complete Test Suite:
 ```bash
 pytest -v
 ```
+*(83 passing unit, integration, and regression audit tests)*
+
+### Run Kalman Filter Benchmark Matrix:
+```bash
+python run_benchmark.py
+```
+*(Executes 15 controlled benchmark scenarios comparing Raw CV vs. Kalman across clean, noisy, and dropout tracks)*
 
 ---
 
@@ -202,10 +209,10 @@ pytest -v
 - Virtual PTZ camera with 4°x3° FOV and physical kinematics.
 - High-precision intensity-weighted subpixel centroid extraction.
 - Deterministic classical CV candidate detection and scoring.
-- 4D Constant-Velocity Kalman filter with missing-frame coasting.
+- 4D Constant-Velocity Kalman filter calibrated for minimal geometric lag and high noise suppression.
 - 5-State Tracking FSM (`SEARCHING`, `ACQUIRED`, `TRACKING`, `LOST`, `REACQUIRED`).
-- Independent `TrackingEvaluator` for objective performance verification.
-- 76/76 passing automated unit and integration tests.
+- Independent `TrackingEvaluator` and `TrackingBenchmarkRunner` for objective performance verification.
+- 83/83 passing automated unit, integration, and audit tests.
 
 ### Current Limitations:
 - Single-beacon primary tracking (multi-target discrimination will be enhanced with AI verification in Phase 5).

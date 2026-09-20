@@ -30,8 +30,8 @@ class CentroidConfig:
 @dataclass
 class KalmanConfig:
     """Parameters for 2D constant-velocity Kalman filter."""
-    process_noise_std: float = 15.0       # Acceleration process noise std (px/s^2)
-    measurement_noise_std: float = 1.0    # Centroid measurement noise std (px)
+    process_noise_std: float = 80.0       # Acceleration process noise std (px/s^2) — accommodates target maneuvering/curvature up to ~100 px/s^2
+    measurement_noise_std: float = 0.2    # Centroid measurement noise std (px) — calibrated for subpixel intensity-weighted moments
     initial_error_std: float = 10.0       # Initial position uncertainty std (px)
     initial_velocity_std: float = 50.0    # Initial velocity uncertainty std (px/s)
 

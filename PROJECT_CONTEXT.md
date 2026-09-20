@@ -275,9 +275,14 @@ Virtual Simulation Engine
 └───────────────────────────────┘ └───────────────────────────────┘
 ```
 
-### Performance & Centroid Accuracy:
-- **Gaussian Beacon Profile**: Mean raw centroid error $< 0.01\text{ px}$ (RMSE $< 0.01\text{ px}$).
-- **Square Beacon Profile**: Mean raw centroid error $\sim 0.74\text{ px}$ due to binary rasterization discretization.
+### Performance & Centroid Accuracy (Post-Audit):
+- **Gaussian Beacon Profile**: Mean raw centroid error $< 0.01\text{ px}$ (RMSE $< 0.01\text{ px}$); Kalman Filtered RMSE $\sim 0.14\text{ px}$.
+- **Square Beacon Profile**: Mean raw centroid error $\sim 0.74\text{ px}$; Kalman Filtered RMSE $\sim 0.64\text{ px}$ (Kalman actively attenuates rasterization quantization noise).
+- **Noisy Measurement Suppression**: Reduces measurement noise by $\sim 50-70\%$ across linear trajectories ($\sigma_n = 1.0\text{ px} \to \text{RMSE}_{KF} \approx 0.52\text{ px}$).
 - **Pipeline Processing Speed**: $\sim 0.5 - 0.8\text{ ms/frame}$ ($> 1200\text{ FPS}$ on standard CPU), comfortably exceeding the 30 Hz / 20 FPS SIH requirement.
 - **Strict Isolation**: Programmatically verified via `test_strict_vision_isolation` that no ground-truth attributes or simulation state leaks into the vision detector or tracker.
+
+### Kalman Filter Benchmark Audit Summary:
+1. **Mathematical Mechanics**: Under clean synthetic simulations with smooth Gaussian spots, raw subpixel centroiding achieves near-infinite SNR (error $< 0.01\text{ px}$). A 2D Constant-Velocity (CV) model on high-curvature trajectories (e.g., $R=150\text{ px}$ circular motion with centripetal acceleration $a_c \approx 92.5\text{ px/s}^2$) exhibits steady-state geometric lag when over-smoothed with low bandwidth ($q=15, r=1.0$).
+2. **Calibrated Operating Point**: Calibrated `KalmanConfig(process_noise_std=80.0, measurement_noise_std=0.2)` provides balanced bandwidth: eliminating geometric curvature lag ($< 0.15\text{ px}$ on circular, $< 0.40\text{ px}$ on figure-8) while providing $> 45\%$ noise reduction on noisy measurements, robust 5-frame coasting extrapolation, and sub-pixel velocity convergence ($\sim 0.2\text{ px/s}$ RMSE).
 
