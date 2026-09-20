@@ -193,12 +193,24 @@ This project delivers a **100% software-based virtual camera tracking, simulatio
   - Ground-truth state generation & telemetry
   - 8-bit monochrome frame renderer
   - Frontend-agnostic engine API & comprehensive unit test suite
-  - Lightweight real-time (30 Hz) Development Visualizer (`visualizer.py` / `main.py --view`) showing synchronized World View, Sensor View, and Telemetry HUD
-- [ ] **Phase 2: Classical Tracking Pipeline**
-  - Candidate beacon detection (thresholding, contour analysis, morphological ops)
-  - Sub-pixel centroid estimation (intensity-weighted moments)
-  - 2D/4D Kalman filter for position/velocity estimation
-  - Multi-state tracking FSM (Acquiring, Tracking, Coasting, Lost)
+  - Lightweight real-time (30 Hz) Development Visualizer (`visualizer.py` / `main.py --view`) showing synchronized World View, Sensor View, and Telemet- [x] **Phase 1: Foundational Simulation Engine & Development Visualizer**
+  - Virtual 2000×2000 world environment
+  - Optical beacon model (shape, size, intensity)
+  - 4 Motion models: Straight-line, Circular, Figure-of-8, Random
+  - Virtual 640×480 camera with 4°×3° FOV & pan/tilt kinematics
+  - Rigorous World-to-Camera angular projection & FOV visibility clipping
+  - Ground-truth state generation & telemetry
+  - 8-bit monochrome frame renderer
+  - Frontend-agnostic engine API & comprehensive unit test suite
+  - Lightweight real-time (30 Hz) Development Visualizer (`visualization/viewer.py` / `main.py --view`) showing synchronized World View, Sensor View, and Telemetry HUD
+- [x] **Phase 2: Classical Computer Vision Detection, Centroiding & Basic Temporal Tracking**
+  - Modular classical CV detector (`backend/vision/detector.py`) with configurable thresholding, contour extraction, geometric/photometric filtering, and deterministic candidate scoring
+  - High-precision sub-pixel centroid estimation (`backend/vision/centroid.py`) using intensity-weighted spatial moments ($m_{10}/m_{00}, m_{01}/m_{00}$)
+  - 4D Constant-Velocity Kalman Filter (`backend/vision/kalman.py`) operating on $[u, v, \dot{u}, \dot{v}]^T$ with continuous white-noise acceleration $Q(\Delta t)$ and missing-frame coasting
+  - 5-State Tracking Finite State Machine (`backend/vision/state_machine.py`) with `SEARCHING`, `ACQUIRED`, `TRACKING`, `LOST`, `REACQUIRED` states
+  - Unified `VisionPipeline` (`backend/vision/pipeline.py`) operating purely on raw image frames ($0\%$ ground truth access)
+  - Independent `TrackingEvaluator` (`backend/evaluation/evaluator.py`) measuring RMSE, detection success rate, target loss, and acquisition latency against authoritative ground truth
+  - Real-time visual tracking telemetry overlay on Camera Sensor View (Ground Truth reticle, Raw Detected crosshair, Kalman Filtered ring & velocity vector, Live HUD status)
 - [ ] **Phase 3: Closed-Loop Gimbal Control**
   - Image space to angular error transformation
   - Discrete-time PID / PD controller with anti-windup
@@ -222,15 +234,50 @@ This project delivers a **100% software-based virtual camera tracking, simulatio
 
 ---
 
-## 7. Current Implementation Status & Development Visualizer
+## 7. Current Implementation Status & Vision Architecture
 
-**Current Milestone**: Phase 1 Completed & Visually Verified.
-- All core simulation models, mathematical projections, motion trajectories, ground-truth data models, and sensor renderer implemented.
-- Pure Python simulation engine tested with full test coverage (24/24 passing unit tests).
-- **Phase 1 Debug Visualizer** (`visualizer.py`): Real-time (~30 Hz) OpenCV-based development viewer:
-  1. **World View Panel** ($520 \times 520$ px): Renders the $2000 \times 2000$ world, coordinate grid, camera position marker, dynamic camera FOV frustum footprint, beacon trajectory history trail, instantaneous velocity vector, and current beacon position.
-  2. **Camera Sensor View Panel** ($640 \times 480$ px): Displays the actual raw monochrome sensor frame produced by `SimulationEngine.renderer`, overlaid with optical center bore-sight crosshairs, target acquisition marker, subpixel centroid coordinates, and "OUT OF FOV" alert banners.
-  3. **Live Telemetry & Control HUD**: Real-time readout of simulation time, frame counter, world coordinates, pan/tilt gimbal angles, visibility status, image pixel coordinates $(u, v)$, and bore-sight error vectors.
-  4. **Interactive Controls**: `[SPACE]` Play/Pause, `[R]` Reset, `[1-4]` Switch motion model on-the-fly, `[S/F]` Adjust simulation speed, `[Q/ESC]` Exit.
-- **Important Note**: This viewer is strictly a Phase 1 internal development and debug validation tool, completely decoupled from the core engine and not the final evaluator GUI. It visually validates physical kinematics, angular projections, and sensor rasterization before implementing Phase 2 tracking.
+**Current Milestone**: Phase 2 Completed & Validated (76/76 passing tests).
+
+### Vision Pipeline Architecture (Strict Isolation):
+```
+Virtual Simulation Engine
+         │
+  [Raw 8-bit Frame] (np.ndarray: 640x480)
+         │  (NO Ground Truth / NO Simulation State)
+         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                       VisionPipeline                        │
+│                                                             │
+│  1. BeaconDetector:                                         │
+│     Grayscale Frame → Binary Thresholding → Contour Extract │
+│     → Area/Aspect Filter → Distance/Intensity Scoring       │
+│                                                             │
+│  2. Intensity-Weighted Subpixel Centroid:                   │
+│     m10/m00, m01/m00 on candidate bounding box              │
+│                                                             │
+│  3. 2D/4D Kalman Filter:                                    │
+│     State: [u, v, u_dot, v_dot]^T                           │
+│     Prediction & Measurement Update / Coasting              │
+│                                                             │
+│  4. Tracking State Machine:                                 │
+│     SEARCHING → ACQUIRED → TRACKING → LOST → REACQUIRED     │
+└─────────────────────────────────────────────────────────────┘
+         │
+  [TrackerOutput] (raw_detection, filtered_centroid, state)
+         │
+         ├────────────────────────────────────────┐
+         ▼                                        ▼
+┌───────────────────────────────┐ ┌───────────────────────────────┐
+│     TrackingEvaluator         │ │     SimulationVisualizer      │
+│  Compares TrackerOutput with  │ │  Renders World Frustum,       │
+│  authoritative GroundTruthState│ │  Camera Sensor Overlays, and  │
+│  Computes RMSE, loss, latency │ │  Real-Time Tracking HUD       │
+└───────────────────────────────┘ └───────────────────────────────┘
+```
+
+### Performance & Centroid Accuracy:
+- **Gaussian Beacon Profile**: Mean raw centroid error $< 0.01\text{ px}$ (RMSE $< 0.01\text{ px}$).
+- **Square Beacon Profile**: Mean raw centroid error $\sim 0.74\text{ px}$ due to binary rasterization discretization.
+- **Pipeline Processing Speed**: $\sim 0.5 - 0.8\text{ ms/frame}$ ($> 1200\text{ FPS}$ on standard CPU), comfortably exceeding the 30 Hz / 20 FPS SIH requirement.
+- **Strict Isolation**: Programmatically verified via `test_strict_vision_isolation` that no ground-truth attributes or simulation state leaks into the vision detector or tracker.
 
