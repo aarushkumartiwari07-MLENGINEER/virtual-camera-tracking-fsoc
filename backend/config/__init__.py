@@ -1,5 +1,5 @@
 """
-Configuration module for the FSOC virtual camera simulation.
+Configuration module for the FSOC virtual camera simulation and vision pipeline.
 """
 
 from .simulation_config import (
@@ -8,10 +8,22 @@ from .simulation_config import (
     CameraConfig,
     SimulationConfig,
 )
+from .vision_config import (
+    DetectorConfig,
+    CentroidConfig,
+    KalmanConfig,
+    StateMachineConfig,
+    VisionConfig,
+)
 
 __all__ = [
     "WorldConfig",
     "BeaconConfig",
     "CameraConfig",
     "SimulationConfig",
+    "DetectorConfig",
+    "CentroidConfig",
+    "KalmanConfig",
+    "StateMachineConfig",
+    "VisionConfig",
 ]
