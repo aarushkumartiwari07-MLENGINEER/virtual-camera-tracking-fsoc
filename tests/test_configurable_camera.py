@@ -192,7 +192,7 @@ def test_renderer_and_visualizer_configurable(cfg):
 
     # Visualizer dimensions
     viz = SimulationVisualizer(config=sim_cfg)
-    dashboard, _ = viz.step_and_render()
+    dashboard, _, _ = viz.step_and_render()
     expected_viz_w = viz.world_panel_size + cfg["resolution"][0] + 3 * viz.margin
     expected_viz_h = max(viz.world_panel_size, cfg["resolution"][1]) + viz.hud_height + 3 * viz.margin
 

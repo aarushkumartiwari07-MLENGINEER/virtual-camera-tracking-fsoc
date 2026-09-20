@@ -16,7 +16,7 @@ def test_visualizer_initialization():
     assert viz.cam_width == 640
     assert viz.cam_height == 480
     assert viz.total_width == 520 + 640 + 3 * 15  # 1205 px
-    assert viz.total_height == 520 + 180 + 3 * 15  # 745 px
+    assert viz.total_height == 520 + 200 + 3 * 15  # 765 px (520 world + 200 HUD + 45 margins)
 
 
 def test_visualizer_world_coord_mapping():
@@ -48,12 +48,13 @@ def test_visualizer_step_and_render():
         )
     )
     viz = SimulationVisualizer(config=config)
-    dashboard, state = viz.step_and_render()
+    dashboard, state, tracker_output = viz.step_and_render()
 
     assert isinstance(dashboard, np.ndarray)
     assert dashboard.shape == (viz.total_height, viz.total_width, 3)
     assert dashboard.dtype == np.uint8
     assert state.frame_index == 1
+    assert tracker_output is not None
     assert len(viz.beacon_trail) == 1
 
 
@@ -63,6 +64,7 @@ def test_visualizer_motion_switching():
     for motion in ["straight_line", "circular", "figure_eight", "random"]:
         viz.reset(motion)
         assert viz.current_motion == motion
-        dashboard, state = viz.step_and_render()
+        dashboard, state, tracker_output = viz.step_and_render()
         assert dashboard is not None
         assert state.frame_index == 1
+        assert tracker_output is not None

@@ -6,33 +6,42 @@ Zero modification to the underlying engine; pure presentation layer.
 
 import time
 import math
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Dict, Any
 import numpy as np
 import cv2
 
 from backend.config.simulation_config import SimulationConfig, BeaconConfig
+from backend.config.vision_config import VisionConfig
 from backend.engine import SimulationEngine
 from backend.models.state import GroundTruthState
+from backend.models.tracking_state import TrackingState, TrackerOutput
+from backend.vision.pipeline import VisionPipeline
+from backend.evaluation.evaluator import TrackingEvaluator
 
 
 class SimulationVisualizer:
     """
-    Real-time interactive viewer for the FSOC Virtual Camera simulation.
-    Consumes the real SimulationEngine output and displays:
-    1. World View (2000x2000 scene with FOV frustum and beacon trajectory)
-    2. Camera View (640x480 actual sensor frame with optical bore-sight reticle)
-    3. Live Ground-Truth Telemetry HUD & Interactive Controls
+    Real-time interactive viewer for the FSOC Virtual Camera simulation and Phase 2 tracking.
+    Consumes SimulationEngine output through the standalone VisionPipeline and displays:
+    1. World View (2000x2000 scene with FOV frustum, camera pos, and beacon trail)
+    2. Camera View (Monochrome sensor frame with Ground Truth, Raw Detected, and Kalman Filtered markers)
+    3. Live Ground-Truth vs Tracking Telemetry HUD & Interactive Controls
     """
 
     def __init__(
         self,
         engine: Optional[SimulationEngine] = None,
         config: Optional[SimulationConfig] = None,
+        vision_config: Optional[VisionConfig] = None,
         target_fps: float = 30.0,
         trail_length: int = 120,
     ) -> None:
         self.config = config or SimulationConfig(fps=target_fps)
+        self.vision_config = vision_config or VisionConfig()
         self.engine = engine or SimulationEngine(self.config)
+        self.pipeline = VisionPipeline(config=self.vision_config)
+        self.evaluator = TrackingEvaluator()
+
         self.target_fps = float(target_fps)
         self.frame_delay_ms = max(1, int(round(1000.0 / self.target_fps)))
         self.speed_multiplier: float = 1.0
@@ -49,17 +58,17 @@ class SimulationVisualizer:
         self.world_panel_size = 520  # 520x520 square for world view
         self.cam_width = self.engine.camera.width
         self.cam_height = self.engine.camera.height
-        self.hud_height = 180
+        self.hud_height = 200
         self.margin = 15
 
         # Canvas total size
         self.total_width = self.world_panel_size + self.cam_width + 3 * self.margin
         self.total_height = max(self.world_panel_size, self.cam_height) + self.hud_height + 3 * self.margin
 
-        self.window_name = "SIH26169 FSOC Virtual Camera Tracking - Phase 1 Viewer (Greedy Minds)"
+        self.window_name = "SIH26169 FSOC Virtual Camera Tracking - Phase 2 Vision Viewer (Greedy Minds)"
 
     def reset(self, motion_type: Optional[str] = None) -> None:
-        """Reset simulation and clear trajectory trail."""
+        """Reset simulation, vision pipeline, evaluator, and clear trajectory trail."""
         if motion_type is not None:
             self.current_motion = motion_type
             self.config.beacon.motion_type = motion_type
@@ -89,6 +98,8 @@ class SimulationVisualizer:
             self.engine = SimulationEngine(self.config)
 
         self.engine.reset()
+        self.pipeline.reset()
+        self.evaluator.reset()
         self.beacon_trail.clear()
 
     def world_to_panel_coords(
@@ -131,14 +142,12 @@ class SimulationVisualizer:
         cv2.rectangle(panel, (0, 0), (self.world_panel_size - 1, self.world_panel_size - 1), (70, 85, 100), 1)
 
         # 2. Compute and draw Camera FOV Frustum Footprint in World Space
-        # Center of FOV in world units = Xcam + pan / Scale_x, Ycam + tilt / Scale_y
         cam = self.engine.camera
         scale_x = cam.scale_x_deg_px
         scale_y = cam.scale_y_deg_px
         fov_center_x = state.camera_world_pos[0] + (state.camera_pan_deg / scale_x)
         fov_center_y = state.camera_world_pos[1] + (state.camera_tilt_deg / scale_y)
 
-        # Half size of camera view in world units = Wcam / 2, Hcam / 2
         half_w = cam.width / 2.0
         half_h = cam.height / 2.0
 
@@ -152,7 +161,7 @@ class SimulationVisualizer:
 
         # Draw semi-transparent FOV footprint
         fov_overlay = panel.copy()
-        fov_color = (0, 180, 255) if state.is_visible else (60, 100, 180)  # Amber when visible, blue when searching
+        fov_color = (0, 180, 255) if state.is_visible else (60, 100, 180)
         cv2.rectangle(fov_overlay, p_min, p_max, fov_color, -1)
         cv2.addWeighted(fov_overlay, 0.15, panel, 0.85, 0, panel)
         cv2.rectangle(panel, p_min, p_max, fov_color, 2, cv2.LINE_AA)
@@ -161,7 +170,6 @@ class SimulationVisualizer:
         cam_p = self.world_to_panel_coords(state.camera_world_pos[0], state.camera_world_pos[1], world_w, world_h)
         cv2.drawMarker(panel, cam_p, (255, 200, 50), cv2.MARKER_DIAMOND, 14, 2, cv2.LINE_AA)
         
-        # Line from camera position to FOV center
         fov_c_p = self.world_to_panel_coords(fov_center_x, fov_center_y, world_w, world_h)
         cv2.line(panel, cam_p, fov_c_p, (255, 200, 50), 1, cv2.LINE_AA)
 
@@ -176,11 +184,10 @@ class SimulationVisualizer:
 
         # 5. Draw Current Beacon Target Position
         beacon_p = self.world_to_panel_coords(state.beacon_world_pos[0], state.beacon_world_pos[1], world_w, world_h)
-        b_color = (0, 255, 120) if state.is_visible else (0, 100, 255)  # Bright Green if visible, Red/Orange if outside FOV
+        b_color = (0, 255, 120) if state.is_visible else (0, 100, 255)
         cv2.circle(panel, beacon_p, 6, b_color, -1, cv2.LINE_AA)
         cv2.circle(panel, beacon_p, 10, b_color, 1, cv2.LINE_AA)
 
-        # Velocity vector
         vx, vy = state.beacon_world_velocity
         vel_end = (
             int(round(beacon_p[0] + vx * 0.2)),
@@ -190,17 +197,23 @@ class SimulationVisualizer:
 
         # Panel Header
         cv2.rectangle(panel, (0, 0), (self.world_panel_size, 26), (15, 18, 22), -1)
-        cv2.putText(panel, f"WORLD VIEW [2000x2000 px]", (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 220, 255), 1, cv2.LINE_AA)
+        cv2.putText(panel, f"WORLD VIEW [{int(world_w)}x{int(world_h)} px]", (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 220, 255), 1, cv2.LINE_AA)
         cv2.putText(panel, f"Cam @ ({int(state.camera_world_pos[0])},{int(state.camera_world_pos[1])})", (self.world_panel_size - 170, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (180, 180, 180), 1, cv2.LINE_AA)
 
         return panel
 
-    def render_camera_view(self, raw_frame: np.ndarray, state: GroundTruthState) -> np.ndarray:
+    def render_camera_view(
+        self,
+        raw_frame: np.ndarray,
+        state: GroundTruthState,
+        tracker_output: Optional[TrackerOutput] = None,
+    ) -> np.ndarray:
         """
-        Overlay annotations on the actual 640x480 monochrome sensor frame.
-        Shows optical center crosshair, FOV bounds, and beacon detection status.
+        Overlay Phase 2 Vision tracking annotations on the raw camera sensor frame:
+        - Ground Truth: Yellow circle (labeled GT)
+        - Raw Detection: Cyan crosshair (labeled RAW)
+        - Kalman Filtered: Magenta ring & velocity vector (labeled KF)
         """
-        # Convert 8-bit single-channel monochrome frame to 3-channel BGR for colored overlays
         view = cv2.cvtColor(raw_frame, cv2.COLOR_GRAY2BGR)
 
         # Optical Bore-Sight Crosshair at Principal Point (u0, v0)
@@ -214,29 +227,45 @@ class SimulationVisualizer:
         # Sensor frame border
         cv2.rectangle(view, (0, 0), (self.cam_width - 1, self.cam_height - 1), (80, 80, 80), 1)
 
+        # 1. Draw Ground Truth Marker (Yellow Reticle)
         if state.is_visible and state.beacon_image_pos is not None:
-            u, v = state.beacon_image_pos
-            iu, iv = int(round(u)), int(round(v))
+            gt_u, gt_v = state.beacon_image_pos
+            gt_iu, gt_iv = int(round(gt_u)), int(round(gt_v))
+            cv2.circle(view, (gt_iu, gt_iv), 8, (0, 220, 255), 1, cv2.LINE_AA)
+            cv2.putText(view, "GT", (gt_iu + 10, gt_iv - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 220, 255), 1, cv2.LINE_AA)
 
-            # Draw target acquisition box
-            box_sz = int(round(self.engine.beacon.size + 8))
-            cv2.rectangle(
-                view,
-                (iu - box_sz // 2, iv - box_sz // 2),
-                (iu + box_sz // 2, iv + box_sz // 2),
-                (0, 255, 0),
-                1,
-                cv2.LINE_AA,
-            )
+        # 2. Draw Raw Detection Marker (Cyan Box & Cross)
+        if tracker_output is not None and tracker_output.raw_detection.is_detected:
+            det = tracker_output.raw_detection
+            if det.centroid is not None:
+                du, dv = det.centroid
+                diu, div = int(round(du)), int(round(dv))
+                
+                if det.bbox is not None:
+                    b_umin, b_vmin, b_umax, b_vmax = det.bbox
+                    cv2.rectangle(view, (b_umin, b_vmin), (b_umax, b_vmax), (255, 255, 0), 1, cv2.LINE_AA)
 
-            # Bore-sight error vector (line from principal point to beacon centroid)
-            cv2.line(view, (cx, cy), (iu, iv), (0, 255, 255), 1, cv2.LINE_AA)
+                cv2.drawMarker(view, (diu, div), (255, 255, 0), cv2.MARKER_CROSS, 10, 1, cv2.LINE_AA)
+                cv2.putText(view, f"RAW: ({du:.1f},{dv:.1f})", (diu + 10, div + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (255, 255, 0), 1, cv2.LINE_AA)
 
-            # Sub-pixel coordinate readout tag
-            tag_text = f"({u:.1f}, {v:.1f})"
-            cv2.putText(view, tag_text, (iu + 10, max(20, iv - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 0), 1, cv2.LINE_AA)
-        else:
-            # Out of FOV Alert Banner
+        # 3. Draw Kalman Filtered Estimate (Magenta Ring & Velocity)
+        if tracker_output is not None and tracker_output.filtered_centroid is not None:
+            fu, fv = tracker_output.filtered_centroid
+            fiu, fiv = int(round(fu)), int(round(fv))
+
+            kf_color = (0, 180, 255) if tracker_output.is_predicted else (255, 0, 255)  # Amber if coasting, Magenta if locked
+            cv2.circle(view, (fiu, fiv), 12, kf_color, 1, cv2.LINE_AA)
+
+            if tracker_output.filtered_velocity is not None:
+                fvx, fvy = tracker_output.filtered_velocity
+                vel_end = (int(round(fiu + fvx * 0.15)), int(round(fiv + fvy * 0.15)))
+                cv2.arrowedLine(view, (fiu, fiv), vel_end, kf_color, 1, cv2.LINE_AA, tipLength=0.3)
+
+            tag = "KF(pred)" if tracker_output.is_predicted else "KF"
+            cv2.putText(view, f"{tag}: ({fu:.1f},{fv:.1f})", (fiu - 35, fiv - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.36, kf_color, 1, cv2.LINE_AA)
+
+        # 4. Out of FOV Banner
+        if not state.is_visible:
             banner_h = 40
             by1 = max(0, cy - banner_h // 2)
             by2 = min(self.cam_height, cy + banner_h // 2)
@@ -262,24 +291,40 @@ class SimulationVisualizer:
             f"CAMERA SENSOR VIEW [{self.cam_width}x{self.cam_height} | {fov_h:.1f}deg x {fov_v:.1f}deg FOV]",
             (10, 18),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.48,
+            0.45,
             (0, 220, 255),
             1,
             cv2.LINE_AA,
         )
         
-        status_text = "IN-FOV" if state.is_visible else "OUT-OF-FOV"
-        status_color = (0, 255, 100) if state.is_visible else (0, 80, 255)
-        cv2.putText(view, f"STATUS: {status_text}", (self.cam_width - 155, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.44, status_color, 1, cv2.LINE_AA)
+        # Tracking FSM State Badge
+        fsm_state = tracker_output.state if tracker_output is not None else TrackingState.SEARCHING
+        if fsm_state == TrackingState.TRACKING:
+            badge_col = (0, 255, 100) # Green
+        elif fsm_state == TrackingState.ACQUIRED:
+            badge_col = (255, 255, 0) # Cyan
+        elif fsm_state == TrackingState.REACQUIRED:
+            badge_col = (255, 0, 255) # Magenta
+        elif fsm_state == TrackingState.SEARCHING:
+            badge_col = (0, 200, 255) # Yellow/Amber
+        else:
+            badge_col = (0, 60, 255)  # Red
+        
+        cv2.putText(view, f"TRACK: {fsm_state.value}", (self.cam_width - 165, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.44, badge_col, 1, cv2.LINE_AA)
 
         return view
 
-    def render_hud_dashboard(self, state: GroundTruthState) -> np.ndarray:
+    def render_hud_dashboard(
+        self,
+        state: GroundTruthState,
+        tracker_output: Optional[TrackerOutput] = None,
+        summary_metrics: Optional[Dict[str, Any]] = None,
+    ) -> np.ndarray:
         """
-        Draw live telemetry readout and keyboard controls help HUD.
+        Draw live telemetry readout comparing Ground Truth against Phase 2 Vision Tracker.
         """
         hud = np.zeros((self.hud_height, self.total_width, 3), dtype=np.uint8)
-        hud[:] = (16, 20, 24)  # Dark console slate
+        hud[:] = (16, 20, 24)
 
         cv2.rectangle(hud, (0, 0), (self.total_width - 1, self.hud_height - 1), (50, 60, 72), 1)
 
@@ -287,10 +332,10 @@ class SimulationVisualizer:
         cv2.rectangle(hud, (0, 0), (self.total_width, 24), (24, 30, 38), -1)
         cv2.putText(
             hud,
-            "REAL-TIME SIMULATION TELEMETRY & GROUND TRUTH [PHASE 1 DEBUG VIEWER]",
+            "REAL-TIME SIMULATION & PHASE 2 CLASSICAL CV TRACKING TELEMETRY",
             (15, 17),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
+            0.44,
             (0, 220, 255),
             1,
             cv2.LINE_AA,
@@ -303,50 +348,69 @@ class SimulationVisualizer:
             f"STATE:{pause_status}  SPEED: {self.speed_multiplier:.1f}x",
             (self.total_width - 240, 17),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
+            0.42,
             pause_color,
             1,
             cv2.LINE_AA,
         )
 
-        # Column 1: Time & Kinematics
+        # Column 1: World Kinematics & Camera
         col1_x = 20
-        y = 48
-        dy = 22
-        cv2.putText(hud, f"Sim Time:     {state.timestamp:6.3f} s  (Frame #{state.frame_index})", (col1_x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 210, 220), 1)
-        cv2.putText(hud, f"Motion Model: {self.current_motion.upper()}", (col1_x, y + dy), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1)
-        cv2.putText(hud, f"Beacon World: ({state.beacon_world_pos[0]:6.1f}, {state.beacon_world_pos[1]:6.1f}) px", (col1_x, y + 2 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 210, 220), 1)
-        cv2.putText(hud, f"Beacon Speed: ({state.beacon_world_velocity[0]:+5.1f}, {state.beacon_world_velocity[1]:+5.1f}) px/s", (col1_x, y + 3 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 210, 220), 1)
-        cv2.putText(hud, f"Camera World: ({state.camera_world_pos[0]:.1f}, {state.camera_world_pos[1]:.1f}) px", (col1_x, y + 4 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 210, 220), 1)
+        y = 46
+        dy = 20
+        cv2.putText(hud, f"Sim Time:     {state.timestamp:6.3f} s  (Frame #{state.frame_index})", (col1_x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 210, 220), 1)
+        cv2.putText(hud, f"Motion Model: {self.current_motion.upper()}", (col1_x, y + dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 220, 255), 1)
+        cv2.putText(hud, f"Beacon World: ({state.beacon_world_pos[0]:6.1f}, {state.beacon_world_pos[1]:6.1f}) px", (col1_x, y + 2 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 210, 220), 1)
+        cv2.putText(hud, f"Beacon Speed: ({state.beacon_world_velocity[0]:+5.1f}, {state.beacon_world_velocity[1]:+5.1f}) px/s", (col1_x, y + 3 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 210, 220), 1)
+        cv2.putText(hud, f"Camera Pan:   {state.camera_pan_deg:+.2f} deg | Tilt: {state.camera_tilt_deg:+.2f} deg", (col1_x, y + 4 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 210, 220), 1)
 
-        # Column 2: Optics & Pointing Error
-        col2_x = 420
-        cv2.putText(hud, f"Camera Pan/Tilt:   Pan: {state.camera_pan_deg:+.2f} deg | Tilt: {state.camera_tilt_deg:+.2f} deg", (col2_x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 210, 220), 1)
-        
-        vis_str = "TRUE (Target in FOV)" if state.is_visible else "FALSE (Outside FOV)"
-        vis_col = (0, 255, 120) if state.is_visible else (0, 80, 255)
-        cv2.putText(hud, f"Target Visibility: {vis_str}", (col2_x, y + dy), cv2.FONT_HERSHEY_SIMPLEX, 0.42, vis_col, 1)
+        # Column 2: Phase 2 Computer Vision Tracking State
+        col2_x = 380
+        fsm_state = tracker_output.state if tracker_output is not None else TrackingState.SEARCHING
+        cv2.putText(hud, f"FSM State:      {fsm_state.value}", (col2_x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 255, 255), 1)
 
-        if state.beacon_image_pos is not None:
-            u, v = state.beacon_image_pos
-            du, dv = state.pixel_error if state.pixel_error else (0.0, 0.0)
-            dist_px = math.hypot(du, dv)
-            az_err, el_err = state.angular_error_deg if state.angular_error_deg else (0.0, 0.0)
-            cv2.putText(hud, f"Projected Image:   u={u:5.1f} px, v={v:5.1f} px", (col2_x, y + 2 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 210, 220), 1)
-            cv2.putText(hud, f"Pixel Error (du,dv): du={du:+5.1f}, dv={dv:+5.1f} px (|E| = {dist_px:5.1f} px)", (col2_x, y + 3 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 255), 1)
-            cv2.putText(hud, f"Angular Error:     dAz={az_err:+.3f} deg, dEl={el_err:+.3f} deg", (col2_x, y + 4 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 210, 220), 1)
-        else:
-            cv2.putText(hud, "Projected Image:   [TARGET NOT VISIBLE]", (col2_x, y + 2 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (120, 130, 140), 1)
-            cv2.putText(hud, "Pixel Error (du,dv): N/A", (col2_x, y + 3 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (120, 130, 140), 1)
-            cv2.putText(hud, "Angular Error:     N/A", (col2_x, y + 4 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (120, 130, 140), 1)
+        det_str = "DETECTED" if (tracker_output and tracker_output.raw_detection.is_detected) else ("COASTING (pred)" if (tracker_output and tracker_output.is_predicted) else "NO DETECTION")
+        det_col = (0, 255, 120) if (tracker_output and tracker_output.raw_detection.is_detected) else ((0, 180, 255) if (tracker_output and tracker_output.is_predicted) else (0, 80, 255))
+        cv2.putText(hud, f"Detection:      {det_str}", (col2_x, y + dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, det_col, 1)
 
-        # Column 3: Interactive Key Controls Guide
-        col3_x = 840
-        cv2.putText(hud, "KEYBOARD SHORTCUTS:", (col3_x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1)
-        cv2.putText(hud, "[SPACE] : Play / Pause", (col3_x, y + dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 190, 200), 1)
-        cv2.putText(hud, "[R]     : Reset Simulation", (col3_x, y + 2 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 190, 200), 1)
-        cv2.putText(hud, "[1-4]   : 1=Line 2=Circle 3=Fig-8 4=Rand", (col3_x, y + 3 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 190, 200), 1)
-        cv2.putText(hud, "[S / F] : Slower / Faster | [Q/ESC] Quit", (col3_x, y + 4 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 190, 200), 1)
+        raw_pos_str = f"({tracker_output.raw_detection.centroid[0]:.1f}, {tracker_output.raw_detection.centroid[1]:.1f})" if (tracker_output and tracker_output.raw_detection.centroid) else "N/A"
+        cv2.putText(hud, f"Raw Centroid:   {raw_pos_str}", (col2_x, y + 2 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 210, 220), 1)
+
+        kf_pos_str = f"({tracker_output.filtered_centroid[0]:.1f}, {tracker_output.filtered_centroid[1]:.1f})" if (tracker_output and tracker_output.filtered_centroid) else "N/A"
+        cv2.putText(hud, f"Kalman Pos:     {kf_pos_str}", (col2_x, y + 3 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 120, 255), 1)
+
+        # Column 3: Performance & Evaluation Metrics (GT Comparison)
+        col3_x = 720
+        raw_err_str = "N/A"
+        filt_err_str = "N/A"
+        if state.is_visible and state.beacon_image_pos is not None and tracker_output is not None:
+            gt_u, gt_v = state.beacon_image_pos
+            if tracker_output.raw_detection.centroid is not None:
+                du = tracker_output.raw_detection.centroid[0] - gt_u
+                dv = tracker_output.raw_detection.centroid[1] - gt_v
+                raw_err_str = f"{math.hypot(du, dv):.2f} px"
+            if tracker_output.filtered_centroid is not None:
+                fdu = tracker_output.filtered_centroid[0] - gt_u
+                fdv = tracker_output.filtered_centroid[1] - gt_v
+                filt_err_str = f"{math.hypot(fdu, fdv):.2f} px"
+
+        cv2.putText(hud, f"Raw Error vs GT:    {raw_err_str}", (col3_x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 0), 1)
+        cv2.putText(hud, f"Kalman Error vs GT: {filt_err_str}", (col3_x, y + dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 120, 255), 1)
+
+        det_rate = summary_metrics.get("detection_rate_pct", 0.0) if summary_metrics else 0.0
+        cv2.putText(hud, f"Detection Rate:     {det_rate:.1f}%", (col3_x, y + 2 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 255, 100), 1)
+
+        proc_ms = tracker_output.total_processing_time_ms if tracker_output else 0.0
+        fps = (1000.0 / proc_ms) if proc_ms > 0 else 0.0
+        cv2.putText(hud, f"Vision Latency/FPS: {proc_ms:.2f} ms ({fps:.0f} FPS)", (col3_x, y + 3 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 210, 220), 1)
+
+        # Column 4: Controls Guide
+        col4_x = 1000
+        cv2.putText(hud, "CONTROLS:", (col4_x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 220, 255), 1)
+        cv2.putText(hud, "[SPACE] Play/Pause", (col4_x, y + dy), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (180, 190, 200), 1)
+        cv2.putText(hud, "[R]     Reset", (col4_x, y + 2 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (180, 190, 200), 1)
+        cv2.putText(hud, "[1-4]   1=Line 2=Circ 3=8 4=Rnd", (col4_x, y + 3 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (180, 190, 200), 1)
+        cv2.putText(hud, "[S / F] Slower / Faster", (col4_x, y + 4 * dy), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (180, 190, 200), 1)
 
         return hud
 
@@ -373,27 +437,46 @@ class SimulationVisualizer:
 
         return canvas
 
-    def step_and_render(self) -> Tuple[np.ndarray, GroundTruthState]:
-        """Advance one simulation step and return composite UI frame and state."""
+    def step_and_render(self) -> Tuple[np.ndarray, GroundTruthState, TrackerOutput]:
+        """Advance one simulation step, run vision pipeline & evaluator, and return composite dashboard."""
         if not self.is_paused:
             dt = (1.0 / self.target_fps) * self.speed_multiplier
-            raw_frame, state = self.engine.step(dt=dt)
-            self.beacon_trail.append(state.beacon_world_pos)
+            raw_frame, gt_state = self.engine.step(dt=dt)
+            self.beacon_trail.append(gt_state.beacon_world_pos)
             if len(self.beacon_trail) > self.trail_length:
                 self.beacon_trail.pop(0)
-        else:
-            state = self.engine.get_state()
-            is_vis, img_pos, _, _, _ = self.engine.renderer.render, state.beacon_image_pos
-            raw_frame = self.engine.renderer.render(
-                self.engine.beacon, self.engine.camera, state.is_visible, state.beacon_image_pos
+
+            # Process frame through standalone Phase 2 vision pipeline
+            tracker_output = self.pipeline.process_frame(
+                frame=raw_frame,
+                dt=dt,
+                timestamp=gt_state.timestamp,
+                frame_index=gt_state.frame_index,
             )
 
-        world_panel = self.render_world_view(state)
-        camera_view = self.render_camera_view(raw_frame, state)
-        hud_panel = self.render_hud_dashboard(state)
+            # Evaluate step
+            self.evaluator.evaluate_step(tracker_output=tracker_output, ground_truth=gt_state)
+
+        else:
+            gt_state = self.engine.get_state()
+            raw_frame = self.engine.renderer.render(
+                self.engine.beacon, self.engine.camera, gt_state.is_visible, gt_state.beacon_image_pos
+            )
+            tracker_output = self.pipeline.last_output or self.pipeline.process_frame(
+                frame=raw_frame,
+                dt=0.0,
+                timestamp=gt_state.timestamp,
+                frame_index=gt_state.frame_index,
+            )
+
+        summary_metrics = self.evaluator.get_summary_metrics()
+
+        world_panel = self.render_world_view(gt_state)
+        camera_view = self.render_camera_view(raw_frame, gt_state, tracker_output)
+        hud_panel = self.render_hud_dashboard(gt_state, tracker_output, summary_metrics)
         dashboard = self.compose_dashboard(world_panel, camera_view, hud_panel)
 
-        return dashboard, state
+        return dashboard, gt_state, tracker_output
 
     def run(self) -> None:
         """
