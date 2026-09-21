@@ -491,7 +491,7 @@ class SimulationVisualizer:
             while True:
                 t0 = time.perf_counter()
 
-                dashboard, state = self.step_and_render()
+                dashboard, state, tracker_output = self.step_and_render()
                 cv2.imshow(self.window_name, dashboard)
 
                 # Compute wait time to maintain ~30 Hz
